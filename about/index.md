@@ -1,6 +1,6 @@
 ---
 title: About
-layout: wikistyle
+layout: page
 ---
 
 # About

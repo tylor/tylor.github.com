@@ -1,6 +1,6 @@
 ---
 title: Vision
-layout: wikistyle
+layout: page
 ---
 
 # Vision

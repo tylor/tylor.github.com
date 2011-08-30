@@ -1,6 +1,6 @@
 ---
 title: Home
-layout: wikistyle
+layout: page
 ---
 
 # Github is awesome!
