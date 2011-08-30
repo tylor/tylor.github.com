@@ -1,6 +1,6 @@
 ---
 title: Home
-layout: page
+layout: default
 ---
 
 # Github is awesome!

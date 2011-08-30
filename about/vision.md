@@ -1,6 +1,6 @@
 ---
 title: Vision
-layout: page
+layout: default
 ---
 
 # Vision
