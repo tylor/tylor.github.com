@@ -3,6 +3,6 @@ title: Home
 layout: default
 ---
 
-# Github is awesome!
+# Home
 
-And this is some more content.
+This is some content.
