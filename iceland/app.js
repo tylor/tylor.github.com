@@ -4,6 +4,10 @@ const PILE_DEPTH = 14; // cards buried deeper than this fade out and are skipped
 const TIDY_DEPTH = 24; // how many cards the squared-up stack at the end shows
 const ZOOM_MS = 460;
 const MAX_MAG = 3.5; // how far past full-screen a pinch can go
+// Which cutouts the pile uses: "web" (1200px, light on memory; zooming swaps
+// in the full one) or "full" (1740px from the start). If phones struggle
+// with "full", switch back to "web".
+const PILE_IMAGES = "web";
 // The picture area of a 600/i-Type frame, as fractions of the frame.
 const PHOTO_SIDE = 0.894; // of the width
 const PHOTO_TOP = 0.058; // of the height
@@ -315,7 +319,7 @@ async function main() {
   let schedule = () => {};
   let ready, started = false;
   const readyToStart = new Promise((resolve) => { ready = resolve; });
-  loadAll(all.map((m) => BASE + m.web), (i, img) => {
+  loadAll(all.map((m) => BASE + m[PILE_IMAGES]), (i, img) => {
     results[i] = img;
     while (placed < total && results[placed] !== undefined) {
       if (results[placed]) addCard(all[placed], results[placed]);
@@ -356,14 +360,31 @@ async function main() {
   pile.appendChild(dim);
   const zoomScale = () => Math.min(innerWidth * 0.96, stageH * 0.9) / (PHOTO_SIDE * cw);
   const view = { zoom: 0, mag: 1, x: 0, y: 0 };
-  let zoomed = -1, viewKey = 0, goal = 0, tween = 0;
+  let zoomed = -1, viewKey = 0, goal = 0, tween = 0, settling = null;
+
+  // Touch screens: the pile is moved by our own drag-and-spring code rather
+  // than Safari's scrolling, because Safari swallows any tap that lands while
+  // its scroll is still gliding (and it glides long after it looks settled).
+  // Desktop keeps native scrolling, where clicks aren't affected.
+  // (?touch forces it, for testing on a desktop.)
+  const virtual = location.search.includes("touch") || !matchMedia("(hover: hover) and (pointer: fine)").matches;
+  let vpos = 0; // scroll position in px, when virtual
+  const pos = () => (virtual ? vpos : scroller.scrollTop);
+  const setPos = (px) => {
+    if (!virtual) return void (scroller.scrollTop = px);
+    vpos = px;
+    schedule();
+  };
+  if (virtual) scroller.classList.add("is-virtual");
 
   // Only re-render the cards when a size actually changed.
   const measure = () => {
     const r = probe.getBoundingClientRect();
     const next = [track.children[0].getBoundingClientRect().height, probe.offsetWidth, probe.offsetHeight, stage.offsetHeight, r.top + r.height / 2];
     if (next.join() === [step, cw, ch, stageH, anchorY].join()) return false;
+    const oldStep = step;
     [step, cw, ch, stageH, anchorY] = next;
+    vpos *= step / oldStep; // stay on the same photo
     if (Math.max(innerWidth, innerHeight) > +contours.dataset.size) drawContours(contours);
     cards.forEach((c) => { c.t = -1; c.tidy = -1; c.zoom = -1; });
     return true;
@@ -371,7 +392,7 @@ async function main() {
 
   const render = () => {
     frame = 0;
-    const p = scroller.scrollTop / step;
+    const p = pos() / step;
     const n = cards.length;
     const end = allPlaced ? clamp01(p - n) : 0; // squaring up the pile
 
@@ -450,7 +471,7 @@ async function main() {
     }
   };
 
-  const hasMouse = matchMedia("(hover: hover) and (pointer: fine)").matches;
+  const hasMouse = !virtual;
 
   // While a photo is picked up the pile can't scroll; scroll gestures put it
   // back down instead. Stays locked until trackpad momentum dies away, so a
@@ -485,9 +506,12 @@ async function main() {
     if (zoomed >= 0) cards[zoomed].el.style.willChange = "";
     const from = { ...view };
     const t0 = performance.now();
+    const scrollFix = settling;
+    settling = null;
     const tick = (now) => {
       const k = clamp01((now - t0) / ZOOM_MS);
       const e = easeInOutCubic(k);
+      if (scrollFix) setPos(lerp(scrollFix.from, scrollFix.to, easeOutCubic(k)));
       setView(Object.fromEntries(Object.keys(target).map((key) => [key, lerp(from[key], target[key], e)])));
       if (k < 1) {
         tween = requestAnimationFrame(tick);
@@ -542,24 +566,26 @@ async function main() {
     }
   };
 
-  // The top card, if it's on the pile or close enough to landing that it
-  // looks it (not mid-flight or at the end). Taps often come while the scroll
-  // is still easing into place.
-  const restingTop = () => {
-    const p = scroller.scrollTop / step;
-    const i = Math.round(p) - 1;
-    return Math.abs(p - Math.round(p)) > 0.25 || i < 0 || i >= cards.length ? -1 : i;
-  };
-  const topCardAt = (x, y) => {
-    const i = restingTop();
-    if (i < 0) return -1;
-    const r = cards[i].el.getBoundingClientRect();
-    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? i : -1;
+  // The card someone means when they tap or pinch: the newest one that's at
+  // least a third of the way in, so a card still arriving counts. (On iPhone
+  // a tap during a scroll first stops it, often between photos.) With a
+  // point, it has to be under it. Not at the end, once the pile's squared up.
+  const cardAt = (x, y) => {
+    const p = pos() / step;
+    if (p > cards.length + 0.3) return -1;
+    const newest = Math.min(cards.length - 1, Math.floor(p));
+    for (let i = newest; i >= 0 && i >= newest - 1; i--) {
+      if (p - i < 0.35) continue;
+      if (x === undefined) return i;
+      const r = cards[i].el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return i;
+    }
+    return -1;
   };
 
   // Full resolution only while up close; phones run out of memory fast.
   const loadFull = async (c) => {
-    if (c.full) return;
+    if (c.full || PILE_IMAGES === "full") return;
     c.full = true;
     const img = await loadImage(BASE + c.m.full);
     if (!img || !c.full) return;
@@ -575,13 +601,11 @@ async function main() {
 
   const pickUp = (i) => {
     cancelAnimationFrame(tween);
-    // Finish the snap instantly (it's nearly there) so the pile is settled
-    // underneath while this card is up close.
+    // If the pile's still moving, ease it the rest of the way to this card
+    // alongside the zoom (see animateView) so it's settled underneath.
     const rest = (i + 1) * step;
-    if (Math.abs(scroller.scrollTop - rest) > 0.5) {
-      scroller.scrollTo({ top: rest, behavior: "instant" });
-      render();
-    }
+    cancelAnimationFrame(glideFrame);
+    settling = Math.abs(pos() - rest) > 0.5 ? { from: pos(), to: rest } : null;
     zoomed = i;
     cards[i].el.style.zIndex = 2;
     cards[i].el.style.willChange = "";
@@ -589,9 +613,21 @@ async function main() {
     updateLock();
   };
 
+  // ?debug on the URL shows what each tap saw, for chasing phone-only issues.
+  const debugEl = location.search.includes("debug") && document.body.appendChild(document.createElement("pre"));
+  if (debugEl) debugEl.style.cssText = "position:fixed;top:0;left:0;z-index:9;margin:0;padding:6px 8px;font:11px/1.3 ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.7);pointer-events:none;max-width:100vw;white-space:pre-wrap";
+  const debug = (msg) => {
+    if (!debugEl) return;
+    const lines = (debugEl.textContent ? debugEl.textContent.split("\n") : []).slice(-7);
+    lines.push(`${(performance.now() / 1000).toFixed(2)} ${msg}`);
+    debugEl.textContent = lines.join("\n");
+  };
+
   const tapAt = (x, y) => {
+    const p = pos() / step;
+    debug(`tap ${Math.round(x)},${Math.round(y)} p=${p.toFixed(3)} open=${isOpen()} zoomed=${zoomed} card=${cardAt(x, y)}`);
     if (isOpen()) return zoomOut();
-    const i = zoomed >= 0 ? zoomed : topCardAt(x, y);
+    const i = zoomed >= 0 ? zoomed : cardAt(x, y);
     if (i < 0) return;
     pickUp(i);
     zoomIn();
@@ -608,7 +644,7 @@ async function main() {
     // Mouse only: on iOS a tap sends a fake mousemove first, and changing
     // anything in response makes Safari treat the tap as a hover and drop it.
     scroller.addEventListener("mousemove", (e) => {
-      if (zoomed < 0) scroller.style.cursor = topCardAt(e.clientX, e.clientY) >= 0 ? "zoom-in" : "";
+      if (zoomed < 0) scroller.style.cursor = cardAt(e.clientX, e.clientY) >= 0 ? "zoom-in" : "";
     });
     scroller.addEventListener("mousedown", (e) => {
       if (isOpen() && view.mag > 1.01) drag = { x: e.clientX, y: e.clientY, px: view.x, py: view.y };
@@ -627,7 +663,7 @@ async function main() {
     if (e.ctrlKey) {
       // Trackpad pinch (and ctrl + scroll wheel).
       if (zoomed < 0) {
-        const i = topCardAt(e.clientX, e.clientY);
+        const i = cardAt(e.clientX, e.clientY);
         if (i < 0) return;
         pickUp(i);
       }
@@ -662,6 +698,32 @@ async function main() {
 
   /* ---- touch ---- */
 
+  // Spring the pile to a photo after a drag. v is the finger's speed in px/ms
+  // (positive = onwards). Faster flicks can carry past more than one photo.
+  const maxPos = () => (track.children.length - 1) * step;
+  let glideFrame = 0;
+  const glide = (v) => {
+    cancelAnimationFrame(glideFrame);
+    const cur = pos() / step;
+    let target = Math.round(cur + Math.max(-4, Math.min(4, (v * 300) / step)));
+    if (Math.abs(v) > 0.2) {
+      target = v > 0 ? Math.max(target, Math.floor(cur) + 1) : Math.min(target, Math.ceil(cur) - 1);
+    }
+    const to = Math.min(track.children.length - 1, Math.max(0, target)) * step;
+    let x = pos(), vel = v * 1000, last = performance.now();
+    const w = 14; // stiffness; critically damped, so no wobble
+    const tick = (now) => {
+      const dt = Math.min(0.032, (now - last) / 1000);
+      last = now;
+      vel += (-w * w * (x - to) - 2 * w * vel) * dt;
+      x += vel * dt;
+      if (Math.abs(x - to) < 0.5 && Math.abs(vel) < 30) return setPos(to);
+      setPos(x);
+      glideFrame = requestAnimationFrame(tick);
+    };
+    glideFrame = requestAnimationFrame(tick);
+  };
+
   // Taps are handled here rather than via click, which iOS sometimes eats.
   // Two fingers pinch; one finger pans when magnified, or puts the photo
   // back down when it's just up close.
@@ -669,9 +731,10 @@ async function main() {
   const spread = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
   const middle = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
   scroller.addEventListener("touchstart", (e) => {
+    cancelAnimationFrame(glideFrame); // a touch catches the pile mid-glide
     if (e.touches.length === 2) {
       if (zoomed < 0) {
-        const i = restingTop();
+        const i = cardAt();
         if (i < 0) return;
         pickUp(i);
       }
@@ -697,10 +760,24 @@ async function main() {
     if (touch.mode === "tap" && Math.hypot(dx, dy) > 10) {
       touch.mode = !isOpen() ? "scroll" : view.mag > 1.01 ? "pan" : "dismiss";
       if (touch.mode === "dismiss") zoomOut();
+      touch.sy = t.clientY; // drag from here, so the pile doesn't jump
+      touch.spos = pos();
+      touch.samples = [];
     }
     if (touch.mode === "pan") setView(clampPan(touch.px + dx, touch.py + dy, view.mag));
-    // Passive, so normal scrolling never waits on this: while a photo is up
-    // close the scroller is locked (.is-locked), so there's nothing to block.
+    if (touch.mode === "scroll" && virtual) {
+      // The pile follows the finger, with resistance past either end.
+      const max = maxPos();
+      let np = touch.spos + (touch.sy - t.clientY);
+      if (np < 0) np *= 0.35;
+      else if (np > max) np = max + (np - max) * 0.35;
+      setPos(np);
+      const now = performance.now();
+      touch.samples.push({ y: t.clientY, t: now });
+      while (touch.samples.length > 2 && now - touch.samples[0].t > 100) touch.samples.shift();
+    }
+    // Passive, so native scrolling (desktop) never waits on this; on touch
+    // screens the scroller is .is-virtual, so there's nothing to block.
   }, { passive: true });
   const touchEnd = (e) => {
     if (!touch) return;
@@ -711,9 +788,20 @@ async function main() {
       }
       return;
     }
+    debug(`${e.type} mode=${touch.mode} ${Math.round(performance.now() - touch.t0)}ms touches=${e.touches.length}`);
     if (touch.mode === "tap" && e.type === "touchend" && performance.now() - touch.t0 < 400) {
       e.preventDefault(); // no follow-up click
       tapAt(touch.x, touch.y);
+    }
+    if (virtual && !e.touches.length && zoomed < 0) {
+      // Let go: spring to a photo, carrying the flick's speed. (Also resumes
+      // a glide that a tap off the photos interrupted.)
+      const sm = touch.mode === "scroll" ? touch.samples : [];
+      const a = sm[0], b = sm[sm.length - 1];
+      // Speed over the last ~100ms, at least a frame's worth, and capped, so a
+      // jittery sample can't fling the pile.
+      const v = a && b !== a ? (a.y - b.y) / Math.max(16, b.t - a.t) : 0;
+      glide(Math.max(-4, Math.min(4, v)));
     }
     if (!e.touches.length) touch = null;
   };
@@ -727,7 +815,7 @@ async function main() {
     e.preventDefault();
     if (!hasMouse) return;
     if (zoomed < 0) {
-      const i = topCardAt(e.clientX, e.clientY);
+      const i = cardAt(e.clientX, e.clientY);
       if (i < 0) return;
       pickUp(i);
     }

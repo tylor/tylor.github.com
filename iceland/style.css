@@ -48,8 +48,11 @@ body {
 
 .scroller::-webkit-scrollbar { display: none; }
 
+/* touch screens: the pile is moved by app.js, not native scrolling */
+.scroller.is-virtual { overflow: hidden; touch-action: none; scroll-snap-type: none; }
+
 /* a photo is picked up: scroll gestures put it down instead of moving on */
-.scroller.is-locked { overflow: hidden; touch-action: none; }
+.scroller.is-locked { overflow: hidden; touch-action: none; scroll-snap-type: none; }
 
 body.is-loading .scroller { overflow: hidden; }
 
