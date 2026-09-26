@@ -1,0 +1,223 @@
+:root {
+  --basalt: #23292b;
+  --ink: #f1ead8;
+  --muted: rgba(241, 234, 216, 0.6);
+  --faint: rgba(241, 234, 216, 0.38);
+
+  /* Polaroid size: as big as fits, leaving room for the caption below on phones. */
+  --ch: min(74svh, calc(100svh - 230px), calc(76vw / 0.821));
+  --cw: calc(var(--ch) * 0.821);
+  --pile-y: 46svh;
+}
+
+* { box-sizing: border-box; }
+
+/* The page itself never scrolls; the photos scroll inside .scroller. That
+   keeps iOS Safari from collapsing its toolbar, which resizes the viewport
+   (and re-snaps, re-lays-out) on the first scroll in each direction. */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+html {
+  background: var(--basalt);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--basalt);
+  color: var(--ink);
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.scroller {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  outline: none;
+}
+
+.scroller::-webkit-scrollbar { display: none; }
+
+body.is-loading .scroller { overflow: hidden; }
+
+/* ---------- scroll track: one snap point per polaroid ---------- */
+
+.track section {
+  height: 100%;
+  scroll-snap-align: start;
+}
+.track { height: 100%; }
+
+/* ---------- the table ---------- */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--basalt);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.contours,
+.grain,
+.vignette,
+.pile,
+.intro {
+  position: absolute;
+  will-change: transform;
+}
+
+.contours {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.grain {
+  inset: 0;
+  opacity: 0.5;
+  background-size: 160px 160px;
+}
+
+.vignette {
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 42%, rgba(255, 244, 220, 0.07), transparent 70%),
+    radial-gradient(ellipse 120% 90% at 50% 45%, transparent 45%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+/* ---------- title / loading ---------- */
+
+.intro {
+  left: 0;
+  right: 0;
+  top: var(--pile-y);
+  transform: translateY(-50%);
+  text-align: center;
+  will-change: opacity;
+}
+
+.intro h1 {
+  margin: 0;
+  font-size: clamp(56px, 11vw, 132px);
+  font-weight: 600;
+  line-height: 0.9;
+  letter-spacing: 0.005em;
+  color: var(--ink);
+}
+
+.intro p {
+  margin: 18px 0 0;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- polaroids ---------- */
+
+.pile {
+  inset: 0;
+  perspective: 1600px;
+}
+
+.card {
+  position: absolute;
+  left: 50%;
+  top: var(--pile-y);
+  width: var(--cw);
+  height: var(--ch);
+  margin-left: calc(var(--cw) / -2);
+  margin-top: calc(var(--ch) / -2);
+  display: none;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+.card img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  -webkit-user-drag: none;
+}
+
+.shadow {
+  position: absolute;
+  inset: -12%;
+  background-size: 100% 100%;
+  will-change: transform, opacity;
+}
+
+/* ---------- caption ---------- */
+
+.caption {
+  pointer-events: none;
+  position: fixed;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(22px, env(safe-area-inset-bottom));
+  z-index: 2;
+  text-align: right;
+  line-height: 1.15;
+}
+
+.line {
+  position: relative;
+  height: 1.15em;
+  perspective: 300px;
+  transition: height 0.4s cubic-bezier(.2, .75, .25, 1);
+}
+
+.line.is-blank { height: 0; }
+
+.line span {
+  position: absolute;
+  right: 0;
+  top: 0;
+  white-space: nowrap;
+  backface-visibility: hidden;
+}
+
+.place { font-size: 28px; font-weight: 600; }
+.date { font-size: 19px; font-weight: 500; color: var(--muted); }
+.count {
+  margin-top: 2px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.links {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  transition: opacity 0.4s;
+}
+
+.caption.is-empty .links { opacity: 0; pointer-events: none; }
+
+.links a {
+  pointer-events: auto;
+  color: var(--faint);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(241, 234, 216, 0.18);
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.links a:hover { color: var(--ink); border-color: var(--ink); }

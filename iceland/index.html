@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Iceland 2026</title>
+  <meta name="theme-color" content="#23292b">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=12">
+</head>
+<body class="is-loading">
+  <div class="stage" id="stage" aria-hidden="true">
+    <canvas class="contours" id="contours"></canvas>
+    <div class="grain" id="grain"></div>
+    <div class="vignette"></div>
+    <div class="intro" id="intro">
+      <h1>Iceland 2026</h1>
+      <p id="status"></p>
+    </div>
+    <div class="pile" id="pile"></div>
+  </div>
+
+  <div class="caption is-empty" id="caption">
+    <div class="line place" id="place"></div>
+    <div class="line date" id="date"></div>
+    <div class="line count" id="count"></div>
+    <nav class="links">
+      <a id="save" href="#" download>Save this photo</a>
+      <a href="polaroids/iceland-polaroids.zip" download>Download all</a>
+    </nav>
+  </div>
+
+  <div class="scroller" id="scroller" tabindex="-1">
+    <main class="track" id="track"></main>
+  </div>
+
+  <script src="app.js?v=12" type="module"></script>
+</body>
+</html>
