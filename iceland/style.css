@@ -43,9 +43,13 @@ body {
   scroll-snap-type: y mandatory;
   scrollbar-width: none;
   outline: none;
+  touch-action: pan-y; /* scroll only: no page pinch or double-tap zoom */
 }
 
 .scroller::-webkit-scrollbar { display: none; }
+
+/* a photo is picked up: scroll gestures put it down instead of moving on */
+.scroller.is-locked { overflow: hidden; touch-action: none; }
 
 body.is-loading .scroller { overflow: hidden; }
 
@@ -154,6 +158,16 @@ body.is-loading .scroller { overflow: hidden; }
   -webkit-user-drag: none;
 }
 
+/* darkens the table and pile behind a zoomed-in photo */
+.dim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: #101415;
+  opacity: 0;
+  will-change: opacity;
+}
+
 .shadow {
   position: absolute;
   inset: -12%;
@@ -171,7 +185,10 @@ body.is-loading .scroller { overflow: hidden; }
   z-index: 2;
   text-align: right;
   line-height: 1.15;
+  transition: opacity 0.35s;
 }
+
+.caption.is-hidden { opacity: 0; }
 
 .line {
   position: relative;

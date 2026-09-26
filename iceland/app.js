@@ -2,6 +2,11 @@ const MANIFEST = "polaroids/manifest.json";
 const BASE = "polaroids/";
 const PILE_DEPTH = 14; // cards buried deeper than this fade out and are skipped
 const TIDY_DEPTH = 24; // how many cards the squared-up stack at the end shows
+const ZOOM_MS = 460;
+const MAX_MAG = 3.5; // how far past full-screen a pinch can go
+// The picture area of a 600/i-Type frame, as fractions of the frame.
+const PHOTO_SIDE = 0.894; // of the width
+const PHOTO_TOP = 0.058; // of the height
 const LOAD_CONCURRENCY = 6;
 const START_AFTER = 3; // photos loaded before you can start scrolling
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"];
@@ -292,11 +297,11 @@ async function main() {
     if (Math.abs(rot) < 1.2) rot += rot < 0 ? -1.5 : 1.5;
     const sweep = (r() < 0.5 ? -1 : 1) * (9 + r() * 12);
     cards.push({
-      m, el, softEl, contactEl,
+      m, el, img, web: img, softEl, contactEl,
       px: (r() - 0.5) * 0.12, py: (r() - 0.5) * 0.08, rot, // resting place on the pile
       fx: (r() - 0.5) * 0.5, frot: rot + sweep, tilt: 9 + r() * 7, // where it's held coming in
       trot: (r() - 0.5) * 1.8, // barely-askew angle once the pile is squared up
-      t: -1, tidy: -1, opacity: 1, visible: false,
+      t: -1, tidy: -1, zoom: -1, opacity: 1, visible: false, full: false,
     });
   };
 
@@ -340,16 +345,27 @@ async function main() {
   const lines = ["place", "date", "count"].map((id) => new Line($(id)));
   const save = $("save");
 
-  let step = 1, cw = 1, ch = 1, stageH = 1;
+  let step = 1, cw = 1, ch = 1, stageH = 1, anchorY = 0;
   let shown = null, introOpacity = -1;
+
+  // Click, tap or pinch to look at the top card up close. view.zoom goes from
+  // 0 (on the pile) to 1 (straightened, picture filling the screen); past that
+  // a pinch magnifies further (view.mag) and view.x/y pan the picture.
+  const dim = document.createElement("div");
+  dim.className = "dim";
+  pile.appendChild(dim);
+  const zoomScale = () => Math.min(innerWidth * 0.96, stageH * 0.9) / (PHOTO_SIDE * cw);
+  const view = { zoom: 0, mag: 1, x: 0, y: 0 };
+  let zoomed = -1, viewKey = 0, goal = 0, tween = 0;
 
   // Only re-render the cards when a size actually changed.
   const measure = () => {
-    const next = [track.children[1].offsetTop, probe.offsetWidth, probe.offsetHeight, stage.offsetHeight];
-    if (next.join() === [step, cw, ch, stageH].join()) return false;
-    [step, cw, ch, stageH] = next;
+    const r = probe.getBoundingClientRect();
+    const next = [track.children[0].getBoundingClientRect().height, probe.offsetWidth, probe.offsetHeight, stage.offsetHeight, r.top + r.height / 2];
+    if (next.join() === [step, cw, ch, stageH, anchorY].join()) return false;
+    [step, cw, ch, stageH, anchorY] = next;
     if (Math.max(innerWidth, innerHeight) > +contours.dataset.size) drawContours(contours);
-    cards.forEach((c) => { c.t = -1; c.tidy = -1; });
+    cards.forEach((c) => { c.t = -1; c.tidy = -1; c.zoom = -1; });
     return true;
   };
 
@@ -377,21 +393,35 @@ async function main() {
         c.el.style.opacity = opacity.toFixed(3);
         c.opacity = opacity;
       }
-      if (t === c.t && tidy === c.tidy) continue;
+      const zk = i === zoomed ? viewKey : -1;
+      if (t === c.t && tidy === c.tidy && zk === c.zoom) continue;
       c.t = t;
       c.tidy = tidy;
+      c.zoom = zk;
+      const zm = i === zoomed ? view.zoom : 0;
 
       const move = easeOutCubic(clamp01(t / 0.85));
       const land = clamp01((t - 0.35) / 0.65);
-      const lift = 1 - land * land; // held above the pile, then drops in
+      const lift = Math.max(1 - land * land, zm); // held above the pile, then drops in
       const startY = stageH * 0.56 + ch * 0.8 + 40;
       // Squared up, each card sits a hair down-right of the one above, so the
       // stack shows its thickness.
-      const x = lerp(lerp(c.fx * cw, c.px * cw, move), depth * 0.0017 * cw, tidy);
-      const y = lerp(lerp(startY, c.py * ch, move), depth * 0.0024 * ch, tidy);
-      const rot = lerp(lerp(c.frot, c.rot, move), c.trot, tidy);
+      let x = lerp(lerp(c.fx * cw, c.px * cw, move), depth * 0.0017 * cw, tidy);
+      let y = lerp(lerp(startY, c.py * ch, move), depth * 0.0024 * ch, tidy);
+      let rot = lerp(lerp(c.frot, c.rot, move), c.trot, tidy);
       const tilt = c.tilt * (1 - move);
-      const scale = 1 + 0.075 * lift;
+      let scale = 1 + 0.075 * (1 - land * land);
+      if (zm > 0) {
+        // Up close: straight, and scaled so the picture (not the frame) fills
+        // the screen, centred (plus any pinch magnification and pan).
+        const side = PHOTO_SIDE * cw;
+        const photoY = PHOTO_TOP * ch + side / 2 - ch / 2; // picture centre, from card centre
+        const S = zoomScale() * view.mag;
+        x = lerp(x, view.x, zm);
+        y = lerp(y, stageH / 2 - anchorY - photoY * S + view.y, zm);
+        rot = lerp(rot, 0, zm);
+        scale = lerp(scale, S, zm);
+      }
       c.el.style.transform =
         `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) rotate(${rot.toFixed(3)}deg) rotateX(${tilt.toFixed(3)}deg) scale(${scale.toFixed(4)})`;
       c.softEl.style.opacity = lift.toFixed(3);
@@ -419,6 +449,301 @@ async function main() {
       if (m) save.href = BASE + m.download;
     }
   };
+
+  const hasMouse = matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+  // While a photo is picked up the pile can't scroll; scroll gestures put it
+  // back down instead. Stays locked until trackpad momentum dies away, so a
+  // flick can't carry on into the next photo.
+  let lastWheel = 0, unlockTimer = 0;
+  const updateLock = () => {
+    const quiet = performance.now() - lastWheel > 250;
+    scroller.classList.toggle("is-locked", zoomed >= 0 || !quiet);
+    caption.classList.toggle("is-hidden", zoomed >= 0);
+    if (hasMouse) scroller.style.cursor = zoomed < 0 ? "" : view.mag > 1.01 ? "grab" : "zoom-out";
+  };
+
+  const setView = (v) => {
+    Object.assign(view, v);
+    viewKey++;
+    dim.style.opacity = (view.zoom * 0.6).toFixed(3);
+    render();
+  };
+
+  const release = () => {
+    const c = cards[zoomed];
+    c.el.style.zIndex = "";
+    c.el.style.willChange = "";
+    dropFull(c);
+    zoomed = -1;
+    updateLock();
+  };
+
+  const animateView = (target) => {
+    cancelAnimationFrame(tween);
+    goal = target.zoom;
+    if (zoomed >= 0) cards[zoomed].el.style.willChange = "";
+    const from = { ...view };
+    const t0 = performance.now();
+    const tick = (now) => {
+      const k = clamp01((now - t0) / ZOOM_MS);
+      const e = easeInOutCubic(k);
+      setView(Object.fromEntries(Object.keys(target).map((key) => [key, lerp(from[key], target[key], e)])));
+      if (k < 1) {
+        tween = requestAnimationFrame(tick);
+      } else if (view.zoom === 0) {
+        release();
+      } else {
+        // Chrome keeps will-change layers at their original resolution,
+        // so drop it once up close to get a sharp re-render.
+        cards[zoomed].el.style.willChange = "auto";
+        updateLock();
+      }
+    };
+    tween = requestAnimationFrame(tick);
+  };
+  const zoomIn = () => animateView({ zoom: 1, mag: 1, x: 0, y: 0 });
+  const zoomOut = () => { if (zoomed >= 0) animateView({ zoom: 0, mag: 1, x: 0, y: 0 }); };
+  const isOpen = () => zoomed >= 0 && goal > 0;
+
+  // Keep the magnified picture covering the screen.
+  const clampPan = (x, y, mag) => {
+    const half = (PHOTO_SIDE * cw * zoomScale() * mag) / 2;
+    const mx = Math.max(0, half - innerWidth / 2), my = Math.max(0, half - stageH / 2);
+    return { x: Math.min(mx, Math.max(-mx, x)), y: Math.min(my, Math.max(-my, y)) };
+  };
+
+  // Scale relative to the card's size on the pile.
+  const currentScale = () => (view.zoom < 1 ? lerp(1, zoomScale(), view.zoom) : zoomScale() * view.mag);
+  // Where a screen point falls on the picture, as a fraction of its size from
+  // its centre (as if already up close, when starting from the pile).
+  const pictureAt = (sx, sy) => {
+    const size = PHOTO_SIDE * cw * zoomScale() * (view.zoom < 1 ? 1 : view.mag);
+    const ox = view.zoom < 1 ? 0 : view.x, oy = view.zoom < 1 ? 0 : view.y;
+    return { u: (sx - innerWidth / 2 - ox) / size, v: (sy - stageH / 2 - oy) / size };
+  };
+  // Scale to s, keeping picture point `at` under the screen point (sx, sy).
+  const scaleTo = (s, sx, sy, at) => {
+    const Z = zoomScale();
+    if (s <= Z) return setView({ zoom: Math.max(0, (s - 1) / (Z - 1)), mag: 1, x: 0, y: 0 });
+    const mag = Math.min(s / Z, MAX_MAG * 1.15);
+    const size = PHOTO_SIDE * cw * Z * mag;
+    setView({ zoom: 1, mag, ...clampPan(sx - innerWidth / 2 - at.u * size, sy - stageH / 2 - at.v * size, mag) });
+  };
+  // After a pinch: stay magnified, or settle up close / back on the pile.
+  const settle = (opening) => {
+    if (view.mag > 1.01) {
+      const mag = Math.min(view.mag, MAX_MAG);
+      animateView({ zoom: 1, mag, ...clampPan(view.x, view.y, mag) });
+    } else if (opening ? view.zoom > 0.25 : view.zoom > 0.75) {
+      zoomIn();
+    } else {
+      zoomOut();
+    }
+  };
+
+  // The top card, if it's on the pile or close enough to landing that it
+  // looks it (not mid-flight or at the end). Taps often come while the scroll
+  // is still easing into place.
+  const restingTop = () => {
+    const p = scroller.scrollTop / step;
+    const i = Math.round(p) - 1;
+    return Math.abs(p - Math.round(p)) > 0.25 || i < 0 || i >= cards.length ? -1 : i;
+  };
+  const topCardAt = (x, y) => {
+    const i = restingTop();
+    if (i < 0) return -1;
+    const r = cards[i].el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? i : -1;
+  };
+
+  // Full resolution only while up close; phones run out of memory fast.
+  const loadFull = async (c) => {
+    if (c.full) return;
+    c.full = true;
+    const img = await loadImage(BASE + c.m.full);
+    if (!img || !c.full) return;
+    c.el.replaceChild(img, c.img);
+    c.img = img;
+  };
+  const dropFull = (c) => {
+    c.full = false;
+    if (c.img === c.web) return;
+    c.el.replaceChild(c.web, c.img);
+    c.img = c.web;
+  };
+
+  const pickUp = (i) => {
+    cancelAnimationFrame(tween);
+    // Finish the snap instantly (it's nearly there) so the pile is settled
+    // underneath while this card is up close.
+    const rest = (i + 1) * step;
+    if (Math.abs(scroller.scrollTop - rest) > 0.5) {
+      scroller.scrollTo({ top: rest, behavior: "instant" });
+      render();
+    }
+    zoomed = i;
+    cards[i].el.style.zIndex = 2;
+    cards[i].el.style.willChange = "";
+    loadFull(cards[i]);
+    updateLock();
+  };
+
+  const tapAt = (x, y) => {
+    if (isOpen()) return zoomOut();
+    const i = zoomed >= 0 ? zoomed : topCardAt(x, y);
+    if (i < 0) return;
+    pickUp(i);
+    zoomIn();
+  };
+
+  /* ---- mouse and keyboard ---- */
+
+  let drag = null, dragged = false;
+  scroller.addEventListener("click", (e) => {
+    if (dragged) { dragged = false; return; }
+    tapAt(e.clientX, e.clientY);
+  });
+  if (hasMouse) {
+    // Mouse only: on iOS a tap sends a fake mousemove first, and changing
+    // anything in response makes Safari treat the tap as a hover and drop it.
+    scroller.addEventListener("mousemove", (e) => {
+      if (zoomed < 0) scroller.style.cursor = topCardAt(e.clientX, e.clientY) >= 0 ? "zoom-in" : "";
+    });
+    scroller.addEventListener("mousedown", (e) => {
+      if (isOpen() && view.mag > 1.01) drag = { x: e.clientX, y: e.clientY, px: view.x, py: view.y };
+    });
+    addEventListener("mousemove", (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.hypot(dx, dy) > 4) dragged = true;
+      setView(clampPan(drag.px + dx, drag.py + dy, view.mag));
+    });
+    addEventListener("mouseup", () => { drag = null; });
+  }
+
+  let wheelSettle = 0;
+  scroller.addEventListener("wheel", (e) => {
+    if (e.ctrlKey) {
+      // Trackpad pinch (and ctrl + scroll wheel).
+      if (zoomed < 0) {
+        const i = topCardAt(e.clientX, e.clientY);
+        if (i < 0) return;
+        pickUp(i);
+      }
+      e.preventDefault();
+      cancelAnimationFrame(tween);
+      const s0 = currentScale();
+      const s = s0 * Math.exp(-e.deltaY * 0.01);
+      scaleTo(s, e.clientX, e.clientY, pictureAt(e.clientX, e.clientY));
+      clearTimeout(wheelSettle);
+      wheelSettle = setTimeout(() => settle(true), 180);
+      return;
+    }
+    if (!scroller.classList.contains("is-locked")) return;
+    e.preventDefault();
+    lastWheel = performance.now();
+    if (isOpen() && view.mag > 1.01) {
+      setView(clampPan(view.x - e.deltaX, view.y - e.deltaY, view.mag)); // scroll pans
+    } else {
+      zoomOut();
+    }
+    clearTimeout(unlockTimer);
+    unlockTimer = setTimeout(updateLock, 260);
+  }, { passive: false });
+
+  addEventListener("keydown", (e) => {
+    if (zoomed < 0) return;
+    if (["Escape", "ArrowDown", "ArrowUp", "PageDown", "PageUp", " ", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      zoomOut();
+    }
+  });
+
+  /* ---- touch ---- */
+
+  // Taps are handled here rather than via click, which iOS sometimes eats.
+  // Two fingers pinch; one finger pans when magnified, or puts the photo
+  // back down when it's just up close.
+  let touch = null;
+  const spread = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const middle = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+  scroller.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      if (zoomed < 0) {
+        const i = restingTop();
+        if (i < 0) return;
+        pickUp(i);
+      }
+      e.preventDefault();
+      cancelAnimationFrame(tween);
+      const mid = middle(e.touches);
+      touch = { mode: "pinch", d0: spread(e.touches), s0: currentScale(), at: pictureAt(mid.x, mid.y) };
+    } else if (e.touches.length === 1) {
+      const t = e.touches[0];
+      touch = { mode: "tap", x: t.clientX, y: t.clientY, t0: performance.now(), px: view.x, py: view.y };
+    }
+  }, { passive: false });
+  scroller.addEventListener("touchmove", (e) => {
+    if (!touch) return;
+    if (touch.mode === "pinch") {
+      if (e.touches.length !== 2) return;
+      const mid = middle(e.touches);
+      scaleTo(touch.s0 * (spread(e.touches) / touch.d0), mid.x, mid.y, touch.at);
+      return;
+    }
+    const t = e.touches[0];
+    const dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+    if (touch.mode === "tap" && Math.hypot(dx, dy) > 10) {
+      touch.mode = !isOpen() ? "scroll" : view.mag > 1.01 ? "pan" : "dismiss";
+      if (touch.mode === "dismiss") zoomOut();
+    }
+    if (touch.mode === "pan") setView(clampPan(touch.px + dx, touch.py + dy, view.mag));
+    // Passive, so normal scrolling never waits on this: while a photo is up
+    // close the scroller is locked (.is-locked), so there's nothing to block.
+  }, { passive: true });
+  const touchEnd = (e) => {
+    if (!touch) return;
+    if (touch.mode === "pinch") {
+      if (e.touches.length < 2) {
+        settle(currentScale() >= touch.s0);
+        touch = null;
+      }
+      return;
+    }
+    if (touch.mode === "tap" && e.type === "touchend" && performance.now() - touch.t0 < 400) {
+      e.preventDefault(); // no follow-up click
+      tapAt(touch.x, touch.y);
+    }
+    if (!e.touches.length) touch = null;
+  };
+  scroller.addEventListener("touchend", touchEnd, { passive: false });
+  scroller.addEventListener("touchcancel", touchEnd);
+
+  // Safari's own pinch-zoom (page zoom on iPhone, gesture events on Mac
+  // trackpads) fights all of the above. On a Mac, use it to drive ours.
+  let gesture = null;
+  document.addEventListener("gesturestart", (e) => {
+    e.preventDefault();
+    if (!hasMouse) return;
+    if (zoomed < 0) {
+      const i = topCardAt(e.clientX, e.clientY);
+      if (i < 0) return;
+      pickUp(i);
+    }
+    cancelAnimationFrame(tween);
+    gesture = { s0: currentScale(), at: pictureAt(e.clientX, e.clientY) };
+  }, { passive: false });
+  document.addEventListener("gesturechange", (e) => {
+    e.preventDefault();
+    if (gesture) scaleTo(gesture.s0 * e.scale, e.clientX, e.clientY, gesture.at);
+  }, { passive: false });
+  document.addEventListener("gestureend", (e) => {
+    e.preventDefault();
+    if (!gesture) return;
+    settle(e.scale >= 1);
+    gesture = null;
+  }, { passive: false });
 
   schedule = () => { if (!frame) frame = requestAnimationFrame(render); };
   scroller.addEventListener("scroll", schedule, { passive: true });
