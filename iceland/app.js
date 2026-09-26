@@ -4,6 +4,8 @@ const PILE_DEPTH = 14; // cards buried deeper than this fade out and are skipped
 const TIDY_DEPTH = 24; // how many cards the squared-up stack at the end shows
 const ZOOM_MS = 460;
 const MAX_MAG = 3.5; // how far past full-screen a pinch can go
+const DOUBLE_TAP_MAG = 2.2; // how far a double tap magnifies
+const DOUBLE_TAP_MS = 280;
 // Which cutouts the pile uses: "web" (1200px, light on memory; zooming swaps
 // in the full one) or "full" (1740px from the start). If phones struggle
 // with "full", switch back to "web".
@@ -626,11 +628,40 @@ async function main() {
   const tapAt = (x, y) => {
     const p = pos() / step;
     debug(`tap ${Math.round(x)},${Math.round(y)} p=${p.toFixed(3)} open=${isOpen()} zoomed=${zoomed} card=${cardAt(x, y)}`);
-    if (isOpen()) return zoomOut();
+    const now = performance.now();
+    if (isOpen()) {
+      // Up close, a double tap magnifies (or goes back), so a single tap has
+      // to wait a beat before it puts the photo down. A second tap soon after
+      // the one that zoomed in counts too.
+      if (pendingTap || now - lastZoomIn < DOUBLE_TAP_MS) {
+        clearTimeout(pendingTap);
+        pendingTap = 0;
+        lastZoomIn = 0;
+        return magnifyAt(x, y);
+      }
+      pendingTap = setTimeout(() => { pendingTap = 0; zoomOut(); }, DOUBLE_TAP_MS);
+      return;
+    }
     const i = zoomed >= 0 ? zoomed : cardAt(x, y);
     if (i < 0) return;
     pickUp(i);
     zoomIn();
+    lastZoomIn = now;
+  };
+  let pendingTap = 0, lastZoomIn = 0;
+  // Another gesture started: it wasn't a single tap after all.
+  const cancelTap = () => { clearTimeout(pendingTap); pendingTap = 0; };
+
+  // Double tap: magnify around the tapped spot, or back to the plain close-up.
+  const magnifyAt = (x, y) => {
+    if (view.mag > 1.2) return zoomIn();
+    const at = pictureAt(x, y);
+    const size = PHOTO_SIDE * cw * zoomScale() * DOUBLE_TAP_MAG;
+    animateView({
+      zoom: 1,
+      mag: DOUBLE_TAP_MAG,
+      ...clampPan(x - innerWidth / 2 - at.u * size, y - stageH / 2 - at.v * size, DOUBLE_TAP_MAG),
+    });
   };
 
   /* ---- mouse and keyboard ---- */
@@ -652,7 +683,10 @@ async function main() {
     addEventListener("mousemove", (e) => {
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      if (Math.hypot(dx, dy) > 4) dragged = true;
+      if (Math.hypot(dx, dy) > 4) {
+        dragged = true;
+        cancelTap();
+      }
       setView(clampPan(drag.px + dx, drag.py + dy, view.mag));
     });
     addEventListener("mouseup", () => { drag = null; });
@@ -668,6 +702,7 @@ async function main() {
         pickUp(i);
       }
       e.preventDefault();
+      cancelTap();
       cancelAnimationFrame(tween);
       const s0 = currentScale();
       const s = s0 * Math.exp(-e.deltaY * 0.01);
@@ -739,6 +774,7 @@ async function main() {
         pickUp(i);
       }
       e.preventDefault();
+      cancelTap();
       cancelAnimationFrame(tween);
       const mid = middle(e.touches);
       touch = { mode: "pinch", d0: spread(e.touches), s0: currentScale(), at: pictureAt(mid.x, mid.y) };
@@ -759,6 +795,7 @@ async function main() {
     const dx = t.clientX - touch.x, dy = t.clientY - touch.y;
     if (touch.mode === "tap" && Math.hypot(dx, dy) > 10) {
       touch.mode = !isOpen() ? "scroll" : view.mag > 1.01 ? "pan" : "dismiss";
+      if (touch.mode !== "scroll") cancelTap();
       if (touch.mode === "dismiss") zoomOut();
       touch.sy = t.clientY; // drag from here, so the pile doesn't jump
       touch.spos = pos();
@@ -819,6 +856,7 @@ async function main() {
       if (i < 0) return;
       pickUp(i);
     }
+    cancelTap();
     cancelAnimationFrame(tween);
     gesture = { s0: currentScale(), at: pictureAt(e.clientX, e.clientY) };
   }, { passive: false });
